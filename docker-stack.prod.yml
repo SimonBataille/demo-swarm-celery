@@ -1,0 +1,57 @@
+version: "3.8"
+networks: { backend: { driver: overlay } }
+volumes: { redis_data: {} }
+
+services:
+  redis:
+    image: redis:7
+    networks: [backend]
+    volumes: [ "redis_data:/data" ]
+    ports:
+      - target: 6379
+        published: 6379
+        protocol: tcp
+        mode: ingress
+    deploy:
+      placement: { constraints: [ "node.role == manager" ] }
+      restart_policy: { condition: any }
+      update_config: { parallelism: 1, delay: 5s }
+
+  app:
+    image: docker.io/DOCKERHUB_USERNAME/lab-app:IMAGE_TAG
+    networks: [backend]
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    ports:
+      - target: 8000
+        published: 8000
+        protocol: tcp
+        mode: ingress
+    healthcheck:
+      test: ["CMD-SHELL", "python - << 'PY'\nimport sys, urllib.request, urllib.error\n"\
+                         "try:\n  urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)\n"\
+                         "except Exception:\n  sys.exit(1)\nPY"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      replicas: 1
+      restart_policy: { condition: any }
+      update_config: { parallelism: 1, delay: 10s }
+    command: >
+      uvicorn main:app --host 0.0.0.0 --port 8000
+
+  worker:
+    image: docker.io/DOCKERHUB_USERNAME/lab-app:IMAGE_TAG
+    networks: [backend]
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    deploy:
+      replicas: 1
+      restart_policy: { condition: any }
+      update_config: { parallelism: 1, delay: 5s }
+    command: >
+      celery -A tasks worker --loglevel=info
+
