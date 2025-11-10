@@ -1,0 +1,43 @@
+name: CD - Local Swarm (self-hosted runner)
+
+on:
+  workflow_run:
+    workflows: ["CI - Build & Push (Docker Hub)"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Tag de l'image Docker à déployer (par défaut: SHA du commit)"
+        required: false
+
+jobs:
+  deploy:
+    # Exécuter si :
+    # - workflow_run a réussi ET branche = main
+    # OU
+    # - déclenchement manuel (workflow_dispatch)
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    runs-on: [self-hosted, swarm-manager]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Docker login
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login \
+            -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Render stack file
+        run: |
+          IMAGE_TAG="${{ github.event.inputs.image_tag || github.sha }}"
+          sed "s/IMAGE_TAG/${IMAGE_TAG}/g; s/DOCKERHUB_USERNAME/${{ secrets.DOCKERHUB_USERNAME }}/g" \
+            docker-stack.prod.yml > /tmp/stack.yml
+          head -n 20 /tmp/stack.yml
+
+      - name: Deploy to Swarm
+        run: |
+          docker info | grep -q "Swarm: active" || docker swarm init --advertise-addr 192.168.1.10
+          docker stack deploy -c /tmp/stack.yml lab
+          docker service ls
