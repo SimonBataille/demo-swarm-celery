@@ -7,15 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Tag de l'image Docker à déployer (par défaut: sha-<short_sha>)"
+        description: "Tag Docker à déployer (ex: sha-<short>, latest, <full_sha>). Laisser vide = short SHA auto."
         required: false
 
 jobs:
   deploy:
     # Exécuter si :
-    # - workflow_run a réussi ET branche = main
-    # OU
-    # - déclenchement manuel (workflow_dispatch)
+    # - déclenchement manuel, OU
+    # - workflow_run (CI) réussi sur la branche main
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
     runs-on: [self-hosted, swarm-manager]
 
@@ -24,21 +23,46 @@ jobs:
         with:
           clean: true
 
-      - name: Docker login
+      - name: Log contexte
+        run: |
+          echo "Event:    ${{ github.event_name }}"
+          echo "Branch:   ${{ github.event.workflow_run.head_branch || 'N/A' }}"
+          echo "CI SHA:   ${{ github.event.workflow_run.head_sha || github.sha }}"
+
+      - name: Docker login (Docker Hub)
         run: |
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login \
             -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Render stack file
+      - name: Choisir le tag (short SHA par défaut)
+        id: pick
+        shell: bash
         run: |
-          SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
-          IMAGE_TAG="${{ github.event.inputs.image_tag || format('sha-{0}', SHORT_SHA) }}"
-          sed "s/IMAGE_TAG/${IMAGE_TAG}/g; s/DOCKERHUB_USERNAME/${{ secrets.DOCKERHUB_USERNAME }}/g" \
-            docker-stack.prod.yml > /tmp/stack.yml
-          head -n 20 /tmp/stack.yml
+          set -euo pipefail
+          # 1) Si un tag est fourni à la main, on l'utilise
+          TAG_INPUT="${{ github.event.inputs.image_tag || '' }}"
+          if [[ -n "$TAG_INPUT" ]]; then
+            echo "image_tag=$TAG_INPUT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-      - name: Deploy to Swarm
+          # 2) Sinon on calcule le short SHA à partir du commit de la CI (ou du commit courant si manuel)
+          SHA_SOURCE="${{ github.event.workflow_run.head_sha || github.sha }}"
+          SHORT_SHA="$(echo "$SHA_SOURCE" | cut -c1-7)"
+          echo "image_tag=sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Rendre le stack
         run: |
+          set -euo pipefail
+          echo "Déploiement avec le tag: ${{ steps.pick.outputs.image_tag }}"
+          sed "s/DOCKERHUB_USERNAME/${{ secrets.DOCKERHUB_USERNAME }}/g; s/IMAGE_TAG/${{ steps.pick.outputs.image_tag }}/g" \
+            docker-stack.prod.yml > /tmp/stack.yml
+          head -n 30 /tmp/stack.yml
+
+      - name: Init Swarm si besoin + déploiement
+        run: |
+          set -euo pipefail
           docker info | grep -q "Swarm: active" || docker swarm init --advertise-addr 192.168.1.10
           docker stack deploy -c /tmp/stack.yml lab
           docker service ls
