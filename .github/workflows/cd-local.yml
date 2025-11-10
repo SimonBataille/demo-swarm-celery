@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Tag de l'image Docker à déployer (par défaut: SHA du commit)"
+        description: "Tag de l'image Docker à déployer (par défaut: sha-<commit>)"
         required: false
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
 
       - name: Render stack file
         run: |
-          IMAGE_TAG="${{ github.event.inputs.image_tag || github.sha }}"
+          IMAGE_TAG="${{ github.event.inputs.image_tag || format('sha-{0}', github.sha) }}"
           sed "s/IMAGE_TAG/${IMAGE_TAG}/g; s/DOCKERHUB_USERNAME/${{ secrets.DOCKERHUB_USERNAME }}/g" \
             docker-stack.prod.yml > /tmp/stack.yml
           head -n 20 /tmp/stack.yml
