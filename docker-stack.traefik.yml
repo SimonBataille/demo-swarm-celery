@@ -1,0 +1,117 @@
+version: "3.8"
+
+networks:
+  backend:
+    driver: overlay
+  traefik:
+    driver: overlay
+
+volumes:
+  redis_data: {}
+  traefik_letsencrypt: {}
+
+services:
+  traefik:
+    image: traefik:v2.11
+    command:
+      - "--providers.docker.swarmMode=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.exposedbydefault=false"
+      # 👉 important : dire à Traefik quel network Swarm utiliser
+      # ATTENTION : ici on suppose que tu déploies avec:  docker stack deploy -c stack.yml lab
+      # donc le réseau "traefik" s’appelle réellement "lab_traefik" dans Swarm.
+      - "--providers.docker.network=lab_traefik"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host     # important en Swarm pour un reverse proxy
+    networks:
+      - traefik
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+
+  redis:
+    image: redis:7
+    networks:
+      - backend
+    volumes:
+      - "redis_data:/data"
+    # En local, pas besoin de publier le port Redis non plus
+    # ports:
+    #   - target: 6379
+    #     published: 6379
+    #     protocol: tcp
+    #     mode: ingress
+    deploy:
+      placement:
+        constraints:
+          - "node.role == manager"
+      restart_policy:
+        condition: any
+      update_config:
+        parallelism: 1
+        delay: 5s
+
+  app:
+    image: docker.io/DOCKERHUB_USERNAME/lab-app:IMAGE_TAG
+    networks:
+      - backend
+      - traefik
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    # Traefik gère l'exposition, donc on retire la section ports :
+    # ports:
+    #   - target: 8000
+    #     published: 8000
+    #     protocol: tcp
+    #     mode: ingress
+    healthcheck:
+      test: ["CMD-SHELL", "python - << 'PY'\nimport sys, urllib.request, urllib.error\ntry:\n urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)\nexcept Exception:\n sys.exit(1)\nPY"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      update_config:
+        parallelism: 1
+        delay: 10s
+      labels:
+        - "traefik.enable=true"
+        # 👉 dire à Traefik sur quel network joindre CE service
+        - "traefik.docker.network=lab_traefik"
+        # Règle simple pour les tests locaux :
+        # on route tout le trafic de http://localhost/ vers ce service
+        - "traefik.http.routers.lab.rule=Host(`localhost`)"
+        - "traefik.http.routers.lab.entrypoints=web"
+        - "traefik.http.services.lab.loadbalancer.server.port=8000"
+    command: >
+      uvicorn main:app --host 0.0.0.0 --port 8000
+
+  worker:
+    image: docker.io/DOCKERHUB_USERNAME/lab-app:IMAGE_TAG
+    networks:
+      - backend
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      update_config:
+        parallelism: 1
+        delay: 5s
+    command: >
+      celery -A tasks worker --loglevel=info
