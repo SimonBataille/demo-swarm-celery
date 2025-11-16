@@ -75,13 +75,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
+      
           # 1) Activer Swarm si besoin
           if ! docker info --format '{{.Swarm.LocalNodeState}}' | grep -q "active"; then
             docker swarm init --advertise-addr 192.168.1.10
           fi
-
-          # 2) Créer le réseau overlay "traefik" s'il n'existe pas déjà
+      
+          # 2) Vérifier qu'on est bien manager (pas worker)
+          if ! docker info --format '{{.Swarm.ControlAvailable}}' | grep -q "true"; then
+            echo "::error::Ce node est dans un Swarm mais n'est PAS manager."
+            echo "Impossible de créer l'overlay 'traefik' depuis ce runner."
+            exit 1
+          fi
+      
+          # 3) Créer le réseau overlay "traefik" s'il n'existe pas
           if ! docker network ls --format '{{.Name}}' | grep -qx 'traefik'; then
             docker network create --driver=overlay traefik
           fi
