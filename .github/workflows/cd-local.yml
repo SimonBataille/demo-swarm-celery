@@ -68,16 +68,22 @@ jobs:
           set -euo pipefail
           sed -e "s|DOCKERHUB_USERNAME|${{ secrets.DOCKERHUB_USERNAME }}|g" \
               -e "s|IMAGE_TAG|${{ steps.tag.outputs.image_tag }}|g" \
-              docker-stack.prod.yml > /tmp/stack.yml
+              docker-stack.traefik_external.yml > /tmp/stack.yml
           head -n 30 /tmp/stack.yml
-
-      - name: Initialize Swarm
+      
+      - name: Initialize Swarm & ensure traefik network
         shell: bash
         run: |
           set -euo pipefail
+
+          # 1) Activer Swarm si besoin
           if ! docker info --format '{{.Swarm.LocalNodeState}}' | grep -q "active"; then
-            # Optionnel : --advertise-addr 192.168.1.10 si nécessaire
             docker swarm init --advertise-addr 192.168.1.10
+          fi
+
+          # 2) Créer le réseau overlay "traefik" s'il n'existe pas déjà
+          if ! docker network ls --format '{{.Name}}' | grep -qx 'traefik'; then
+            docker network create --driver=overlay traefik
           fi
 
       - name: Deploy stack
