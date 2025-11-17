@@ -75,8 +75,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          docker swarm leave --force || true
           docker swarm init --advertise-addr 192.168.1.10
+          docker network rm traefik 2>/dev/null || true
           docker network create --driver=overlay traefik
+          
+          #TODO : tests
+          ## Activer Swarm si besoin
+          #if ! docker info --format '{{.Swarm.LocalNodeState}}' | grep -q "active"; then
+          #  docker swarm init --advertise-addr 192.168.1.10
+          #fi
+
+          ## Créer le réseau overlay "traefik" s'il n'existe pas déjà
+          #if ! docker network ls --format '{{.Name}}' | grep -qx 'traefik'; then
+          #  docker network create --driver=overlay traefik
+          #fi
 
       - name: Deploy stack
         shell: bash
