@@ -1,0 +1,172 @@
+version: "3.8"
+
+############################
+# Réseaux
+############################
+networks:
+  # Réseau interne pour app + redis + worker
+  backend:
+    driver: overlay
+
+  # Réseau frontal partagé avec Traefik (déjà créé en externe)
+  traefik:
+    external: true   # => network "traefik" déjà créé via docker network create
+
+############################
+# Volumes
+############################
+volumes:
+  redis_data: {}
+  traefik_letsencrypt: {}
+
+############################
+# Services
+############################
+services:
+
+  ##########################
+  # Reverse proxy Traefik
+  ##########################
+  traefik:
+    image: traefik:v2.11
+    command:
+      - "--providers.docker.swarmMode=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=traefik"
+
+      ## HTTP (80) + redirection vers HTTPS
+      #- "--entrypoints.web.address=:80"
+      #- "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      #- "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+
+      ## HTTPS (443)
+      #- "--entrypoints.websecure.address=:443"
+      #- "--entrypoints.websecure.http.tls=true"
+      #- "--entrypoints.websecure.http.tls.certificates.certFile=/certs/localhost+1.pem"
+      #- "--entrypoints.websecure.http.tls.certificates.keyFile=/certs/localhost+1-key.pem"
+
+      # Entrypoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      
+      # TLS avec certificats statiques
+      - "--entrypoints.websecure.http.tls=true"
+      
+      # Certificats statiques (optionnel - Traefik les détecte automatiquement)
+      
+      #- "--certificatesstores.default.defaultCertificate.certFile=/certs/localhost+1.pem"
+      #- "--certificatesstores.default.defaultCertificate.keyFile=/certs/localhost+1-key.pem"
+
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host      # recommandé pour les reverse proxies en Swarm
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: host
+
+    networks:
+      - traefik
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt        # si tu veux garder pour plus tard
+      - /home/simon/Documents/Geek/traefik/certs/:/certs:ro    # 👈 là où sont les certs mkcert
+
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+
+  ##########################
+  # Redis (broker / backend)
+  ##########################
+  redis:
+    image: redis:7
+    networks:
+      - backend
+    volumes:
+      - "redis_data:/data"
+    # Pas besoin de publier le port en local: app & worker parlent via le network
+    deploy:
+      placement:
+        constraints:
+          - "node.role == manager"
+      restart_policy:
+        condition: any
+      update_config:
+        parallelism: 1
+        delay: 5s
+
+  ##########################
+  # App FastAPI
+  ##########################
+  app:
+    image: docker.io/DOCKERHUB_USERNAME/lab-app:IMAGE_TAG
+    # Adapter DOCKERHUB_USERNAME et IMAGE_TAG à ton cas
+
+    networks:
+      - backend
+      - traefik
+
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+
+    # Pas de "ports:" ici : Traefik expose l'app
+    healthcheck:
+      test: ["CMD-SHELL", "python - << 'PY'\nimport sys, urllib.request, urllib.error\ntry:\n urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)\nexcept Exception:\n sys.exit(1)\nPY"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      update_config:
+        parallelism: 1
+        delay: 10s
+
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik"
+
+        # Routeur : HTTPS sur /app
+        - "traefik.http.routers.lab.rule=Host(`localhost`) && PathPrefix(`/app`)"
+        - "traefik.http.routers.lab.entrypoints=websecure"
+        - "traefik.http.routers.lab.middlewares=lab-strip"
+
+        # Strip /app avant d'atteindre FastAPI
+        - "traefik.http.middlewares.lab-strip.stripprefix.prefixes=/app"
+
+        # Port interne de l'app
+        - "traefik.http.services.lab.loadbalancer.server.port=8000"
+
+    command: >
+      uvicorn main:app --host 0.0.0.0 --port 8000
+
+  ##########################
+  # Worker Celery
+  ##########################
+  worker:
+    image: docker.io/DOCKERHUB_USERNAME/lab-app:IMAGE_TAG
+    networks:
+      - backend
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      update_config:
+        parallelism: 1
+        delay: 5s
+    command: >
+      celery -A tasks worker --loglevel=info
