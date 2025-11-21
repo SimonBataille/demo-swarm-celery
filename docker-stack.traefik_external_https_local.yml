@@ -30,40 +30,30 @@ services:
   traefik:
     image: traefik:v2.11
     command:
+      # Providers
       - "--providers.docker.swarmMode=true"
       - "--providers.docker.endpoint=unix:///var/run/docker.sock"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=traefik"
+
+      # 👉 Provider fichier pour la config dynamique (tls.yml)
+      - "--providers.file.directory=/dynamic"
+      - "--providers.file.watch=true"
 
       # HTTP (80) + redirection vers HTTPS
       - "--entrypoints.web.address=:80"
       - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
 
-      # HTTPS (443) avec TLS + cert mkcert
+      # HTTPS (443) avec TLS (cert déclaré dans tls.yml)
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.websecure.http.tls=true"
-      - "--entrypoints.websecure.http.tls.certificates[0].certFile=/certs/local-cert.pem"
-      - "--entrypoints.websecure.http.tls.certificates[0].keyFile=/certs/local-key.pem"
-
-
-      # Entrypoints
-      #- "--entrypoints.web.address=:80"
-      #- "--entrypoints.websecure.address=:443"
-      
-      # TLS avec certificats statiques
-      #- "--entrypoints.websecure.http.tls=true"
-      
-      # Certificats statiques (optionnel - Traefik les détecte automatiquement)
-      
-      #- "--certificatesstores.default.defaultCertificate.certFile=/certs/localhost+1.pem"
-      #- "--certificatesstores.default.defaultCertificate.keyFile=/certs/localhost+1-key.pem"
 
     ports:
       - target: 80
         published: 80
         protocol: tcp
-        mode: host      # recommandé pour les reverse proxies en Swarm
+        mode: host
       - target: 443
         published: 443
         protocol: tcp
@@ -74,8 +64,9 @@ services:
 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - traefik_letsencrypt:/letsencrypt        # si tu veux garder pour plus tard
-      - /home/simon/Documents/Geek/traefik/certs/:/certs:ro    # 👈 là où sont les certs mkcert
+      - traefik_letsencrypt:/letsencrypt
+      - /home/simon/Documents/Geek/traefik/certs:/certs:ro
+      - /home/simon/Documents/Geek/traefik/dynamic:/dynamic:ro
 
     deploy:
       placement:
@@ -108,8 +99,7 @@ services:
   # App FastAPI
   ##########################
   app:
-    image: docker.io/DOCKERHUB_USERNAME/lab-app:IMAGE_TAG
-    # Adapter DOCKERHUB_USERNAME et IMAGE_TAG à ton cas
+    image: lab-app:local
 
     networks:
       - backend
@@ -156,7 +146,7 @@ services:
   # Worker Celery
   ##########################
   worker:
-    image: docker.io/DOCKERHUB_USERNAME/lab-app:IMAGE_TAG
+    image: lab-app:local
     networks:
       - backend
     environment:
