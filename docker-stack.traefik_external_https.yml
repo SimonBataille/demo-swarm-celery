@@ -65,8 +65,6 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_letsencrypt:/letsencrypt
-      #- /home/simon/Documents/Geek/traefik/certs:/certs:ro
-      #- /home/simon/Documents/Geek/traefik/dynamic:/dynamic:ro
       - ${TRAEFIK_CERTS_DIR}:/certs:ro
       - ${TRAEFIK_DYNAMIC_DIR}:/dynamic:ro
 
