@@ -68,7 +68,7 @@ jobs:
           set -euo pipefail
           sed -e "s|DOCKERHUB_USERNAME|${{ secrets.DOCKERHUB_USERNAME }}|g" \
               -e "s|IMAGE_TAG|${{ steps.tag.outputs.image_tag }}|g" \
-              docker-stack.traefik_external.yml > /tmp/stack.yml
+              docker-stack.traefik_external_https.yml > /tmp/stack.yml
           head -n 30 /tmp/stack.yml
       
       - name: Initialize Swarm & ensure traefik network
