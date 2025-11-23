@@ -62,6 +62,32 @@ jobs:
           set -euo pipefail
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
+      # 🔐 Préparer les certificats pour Traefik (à partir des secrets GitHub)
+      - name: Prepare certs for Traefik
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CERTS_DIR="$HOME/traefik/certs"
+          mkdir -p "$CERTS_DIR"
+
+          # LOCAL_CERT = cert complet (BEGIN CERTIFICATE ... END CERTIFICATE)
+          # LOCAL_KEY  = clé privée complète (BEGIN PRIVATE KEY ... END PRIVATE KEY)
+          printf '%s' "${{ secrets.LOCAL_CERT }}" > "$CERTS_DIR/local-cert.pem"
+          printf '%s' "${{ secrets.LOCAL_KEY }}"  > "$CERTS_DIR/local-key.pem"
+
+          echo "TRAEFIK_CERTS_DIR=$CERTS_DIR" >> "$GITHUB_ENV"
+
+          ls -l "$CERTS_DIR"
+
+      # 📂 Pointer vers la config dynamique Traefik (tls.yml) versionnée dans le repo
+      - name: Export dynamic config path
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "TRAEFIK_DYNAMIC_DIR=${GITHUB_WORKSPACE}/traefik/dynamic" >> "$GITHUB_ENV"
+
+
       - name: Generate stack file
         shell: bash
         run: |
